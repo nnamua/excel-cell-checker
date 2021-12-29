@@ -1,0 +1,23 @@
+{
+    "cols" : [
+        {
+            "name" : "id",
+            "type" : "string",
+            "regex" : "[0-9]{5}",
+            "non-null" : true
+        },
+        {
+            "name" : "first_name",
+            "type" : "string"
+        },
+        {
+            "name" : "age",
+            "type" : "number"
+        },
+        {
+            "name" : "useless",
+            "type" : "string",
+            "skip" : true
+        }
+    ]
+  }
