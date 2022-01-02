@@ -2,7 +2,7 @@
 
 ## Description
 
-This tool checks a given `.xlsx` file has the structure specified in a `.json` file.
+This tool checks if a given `.xlsx` file has the structure specified in a `.json` file.
 
 ## Requirements
 
