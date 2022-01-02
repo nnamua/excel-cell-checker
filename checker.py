@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import re, argparse, sys, json, logging, os
+import re, argparse, sys, json, logging, os, util
 from openpyxl import load_workbook
 from numbers import Number
 from datetime import datetime
@@ -23,37 +23,6 @@ STRING_TYPE = "string"
 # Maximum number of rows in the output tables
 OUTPUT_TABLE_MAX = 20
 
-# The following functions add ANSI-escape sequences for text highlighting
-
-# green
-def g(string):
-    return f"\033[32m{string}\033[0m"
-
-# red
-def r(string):
-    return f"\033[31m{string}\033[0m"
-
-# yellow
-def y(string):
-    return f"\033[33m{string}\033[0m"
-
-# underline
-def ul(string):
-    return f"\033[4m{string}\033[0m"
-
-# bold
-def b(string):
-    return f"\033[1m{string}\033[0m"
-
-# prints with indentation
-def print_indent(string, indent=0):
-    string = string.replace("\n", "\n"+" "*indent)
-    print(f"{' ' * indent}{string}")
-
-OK    = f"[{g('OK')}]"
-ERROR = f"[{r('ERROR')}]"
-SKIPPED = f"[{y('SKIPPED')}]"
-
 # Only execute if run as a script
 if __name__ == "__main__":
 
@@ -62,6 +31,7 @@ if __name__ == "__main__":
     parser.add_argument("table", help=".xlsx file that needs to be checked.", type=str)
     parser.add_argument("structure", help=".json structure file", type=str)
     parser.add_argument("-s, --sheet", dest="sheet", help="Name of the sheet", type=str)
+    parser.add_argument("-o, --highlighted", dest="highlighted", help="Store copy of .xlsx file with violating cells highlighted.", type=str)
     parser.add_argument("--hide-skipped", dest="hide_skipped", action="store_const", const=True, help="Dont print skipped columns")
     parser.add_argument("--hide-ok", dest="hide_ok", action="store_const", const=True, help="Dont print columns without violations")
     args = parser.parse_args()
@@ -71,6 +41,7 @@ if __name__ == "__main__":
     sheetname = args.sheet
     hide_skipped = args.hide_skipped
     hide_ok = args.hide_ok
+    hl_filename = args.highlighted
 
     # Logging
     logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
@@ -82,19 +53,27 @@ if __name__ == "__main__":
     if not struct_filename.endswith(".json"):
         logging.critical("Structure file must be of type '.json' .")
         sys.exit()
+    if hl_filename != None and not hl_filename.endswith(".xlsx"):
+        logging.critical("Highlighted output file must be of type '.xlsx' .")
+        sys.exit()
+    if hl_filename == table_filename: # Forbid overwriting original file
+        logging.warning("Highlighted output file cannot be input table file.")
+        sys.exit()
 
     # Load structure
     print(f"Loading structure file {struct_filename.split(os.path.sep)[-1]} .. ")
     with open(struct_filename, "r") as struct_file:
         structure = json.load(struct_file)
-    if "cols" not in structure:
-        sys.exit("Key 'cols' not found in structure file.")
+    struct_check = util.check_struct(structure)
+    if struct_check != None:
+        sys.exit(f"Structure is invalid: {struct_check}")
     cols = structure["cols"]
 
     # Load excel sheet
     print(f"Loading excel file {table_filename.split(os.path.sep)[-1]} ..")
     try:
-        wb = load_workbook(filename=table_filename, read_only=True)
+        read_only = hl_filename == None
+        wb = load_workbook(filename=table_filename, read_only=read_only)
     except Exception as e:
         logging.critical(f"Could not open table file: {e}")
         sys.exit()
@@ -134,6 +113,8 @@ if __name__ == "__main__":
         for col, cell in zip(cols, row):
             value = cell.value
             colname = col["name"]
+            if value != None: # Count non-empty cells for each column
+                col_lens[colname] += 1
 
             # skip column?
             if col.get("skip", False):
@@ -142,29 +123,36 @@ if __name__ == "__main__":
             # check if cell is allowed to be empty
             if value == None:
                 if col.get("non-null", False):
-                    violations[colname].append(
-                        NonEmptyViolation(colname, index, str(value))
-                    )
+                    vl = NonEmptyViolation(colname, index, str(value))
+                    violations[colname].append(vl)
+
+                    if hl_filename != None: util.mark(cell, vl)
                 continue
 
-            # At this point, the cell cannot be empty
-            col_lens[colname] += 1
+            # Get expected type (required field)
+            try:
+                coltype = col["type"]
+            except KeyError:
+                logging.warning(f"'type' key was not found for column {colname}. Column will be skipped.")
+                col["skip"] = True
+            expected_type = TYPES[coltype]
 
             # check type
-            expected_type = TYPES[col["type"]]
             if not isinstance(cell.value, expected_type):
-                violations[colname].append(
-                    TypeViolation(colname, cell.row, str(value), expected_type, type(value))
-                )
+                vl = TypeViolation(colname, cell.row, str(value), expected_type, type(value))
+                violations[colname].append(vl)
+
+                if hl_filename != None: util.mark(cell, vl)
                 continue
 
             # check regex
             if col["type"] == STRING_TYPE and "regex" in col:
                 pattern = col["regex"]
                 if not re.match(pattern, value):
-                    violations[colname].append(
-                        RegexViolation(colname, cell.row, str(value), pattern)
-                    )
+                    vl = RegexViolation(colname, cell.row, str(value), pattern)
+                    violations[colname].append(vl)
+
+                    if hl_filename != None: util.mark(cell, vl)
 
     print("\nDone!\n")
 
@@ -182,13 +170,13 @@ if __name__ == "__main__":
         if hide_ok and len(value) == 0:
             continue
 
-        print(b(f"> {key}"))
+        print(util.b(f"> {key}"))
         if col.get("skip", False):
-            print(f"{SKIPPED}\n")
+            print(f"{util.SKIPPED}\n")
         elif len(value) == 0:
-            print(f"{OK} : No violations found\n")
+            print(f"{util.OK} : No violations found\n")
         else:
-            print(f"{ERROR} : {len(value)} violations found")
+            print(f"{util.ERROR} : {len(value)} violations found")
 
             """
                 For each type of violation, check if every cell in this column
@@ -199,48 +187,55 @@ if __name__ == "__main__":
             type_violations = [ vl for vl in value if isinstance(vl, TypeViolation) ]
             if len(type_violations) == col_lens[key]: # all cells
                 actual_types = set([ vl.actual.__name__ for vl in type_violations ])
-                print_indent(f"All cells did not match the expected type '{col['type']}'. Instead, the following type(s) were found: [{','.join(actual_types)}]", indent=2)
+                util.print_indent(f"All cells did not match the expected type '{col['type']}'. Instead, the following type(s) were found: [{','.join(actual_types)}]", indent=2)
 
             elif len(type_violations) != 0: # some cells
-                print_indent(f"The following cells did not match the expected type ({col['type']}) :\n", indent=2)
+                util.print_indent(f"The following cells did not match the expected type ({col['type']}) :\n", indent=2)
 
                 table = [ (vl.row, f"'{vl.value}'", vl.actual.__name__) for vl in type_violations ]
                 if len(type_violations) > OUTPUT_TABLE_MAX: # too many
-                    print_indent(tabulate(table[:OUTPUT_TABLE_MAX], headers=("Row", "Value", "Type")), indent=4)
-                    print_indent(f".. and {len(type_violations) - OUTPUT_TABLE_MAX} more!", indent=4)
+                    util.print_indent(tabulate(table[:OUTPUT_TABLE_MAX], headers=("Row", "Value", "Type")), indent=4)
+                    util.print_indent(f".. and {len(type_violations) - OUTPUT_TABLE_MAX} more!", indent=4)
                 else:
-                    print_indent(tabulate(table, headers=("Row", "Value", "Type")), indent=4)
+                    util.print_indent(tabulate(table, headers=("Row", "Value", "Type")), indent=4)
             print() # padding
 
             # regex violations
             regex_violations = [ vl for vl in value if isinstance(vl, RegexViolation) ]
             if len(regex_violations) == col_lens[key]:
-                print_indent(f"All cells did not match the regular expression.", indent=2)
+                util.print_indent(f"All cells did not match the regular expression.", indent=2)
 
             elif len(regex_violations) != 0:
-                print_indent("The following cells did not match the regular expression:\n", indent=2)
+                util.print_indent("The following cells did not match the regular expression:\n", indent=2)
 
                 table = [ (vl.row, f"'{vl.value}'") for vl in regex_violations ]
                 if len(regex_violations) > OUTPUT_TABLE_MAX: # too many
-                    print_indent(tabulate(table[:OUTPUT_TABLE_MAX], headers=("Row", "Value")), indent=4)
-                    print_indent(f".. and {len(regex_violations) - OUTPUT_TABLE_MAX} more!", indent=4)
+                    util.print_indent(tabulate(table[:OUTPUT_TABLE_MAX], headers=("Row", "Value")), indent=4)
+                    util.print_indent(f".. and {len(regex_violations) - OUTPUT_TABLE_MAX} more!", indent=4)
                 else:
-                    print_indent(tabulate(table, headers=("Row", "Value")), indent=4)
+                    util.print_indent(tabulate(table, headers=("Row", "Value")), indent=4)
             print() # padding
 
             # non empty violations
             nonempty_violations = [ vl for vl in value if isinstance(vl, NonEmptyViolation) ]
             if len(nonempty_violations) == col_lens[key]:
-                print_indent(f"All cells are empty, even though non-null is set to true", indent=2)
+                util.print_indent(f"All cells are empty, even though non-null is set to true", indent=2)
 
             elif len(nonempty_violations) != 0:
-                print_indent("The following cells are empty, even though non-null is set to true:\n", indent=2)
+                util.print_indent("The following cells are empty, even though non-null is set to true:\n", indent=2)
 
                 table = [ (vl.row,) for vl in nonempty_violations ]
                 if len(nonempty_violations) > OUTPUT_TABLE_MAX:
-                    print_indent(tabulate(table[:OUTPUT_TABLE_MAX], headers=("Row",)), indent=4)
-                    print_indent(f".. and {len(nonempty_violations) - OUTPUT_TABLE_MAX} more!", indent=4)
+                    util.print_indent(tabulate(table[:OUTPUT_TABLE_MAX], headers=("Row",)), indent=4)
+                    util.print_indent(f".. and {len(nonempty_violations) - OUTPUT_TABLE_MAX} more!", indent=4)
                 else:
-                    print_indent(tabulate(table, headers=("Row",)), indent=4)
+                    util.print_indent(tabulate(table, headers=("Row",)), indent=4)
             print() # padding
 
+
+    # Save worksheet if highlight file is specified
+    if hl_filename != None:
+        try:
+            wb.save(hl_filename)
+        except PermissionError as e:
+            logging.critical(f"Could not save highlight file, is the file currently open? : {e}")

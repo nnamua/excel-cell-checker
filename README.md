@@ -65,6 +65,9 @@ This summary can be modified by the following parameters:
   * `--hide-skipped` Hides skipped columns
   * `--hide-ok` Hides columns with no violations
 
+Additionally, the tool can generate a copy of the original `.xlsx` file, where violating cells are marked and a comment containing the reason of the violation is added. Since original comments will be overwritten, it is not allowed to set this file to the original file.
+Use this feature with the `-o` / `--highlighted` option.
+
 ## Examples
 
 Example source files can be found in the `examples` directory.
