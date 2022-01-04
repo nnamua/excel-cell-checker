@@ -73,7 +73,7 @@ if __name__ == "__main__":
     print(f"Loading excel file {table_filename.split(os.path.sep)[-1]} ..")
     try:
         read_only = hl_filename == None
-        wb = load_workbook(filename=table_filename, read_only=read_only)
+        wb = load_workbook(filename=table_filename, read_only=read_only, data_only=True)
     except Exception as e:
         logging.critical(f"Could not open table file: {e}")
         sys.exit()
