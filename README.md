@@ -16,6 +16,7 @@ $ pip install -r requirements.txt
 ## Usage
 
 First, you must create a `.json` file containing the structure of your excel file. The root of the structure is an array with the key `"cols"`:
+The script `generate_empty.py` can help you by generating an empty structure file, pre-populated by column names from a given file.
 
 ```json
 {
